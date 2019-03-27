@@ -5,11 +5,25 @@ import (
 	"encoding/json"
 	"github.com/docker/docker/api/types"
 	"github.com/docker/docker/client"
+	"github.com/pkg/errors"
 	"io"
 	"strings"
 )
 
-func ListenResourcesUsage(client *client.Client, containerID string) (<-chan interface{}, <-chan error, error) {
+type ResourcesUsage struct {
+	ContainerID string
+
+	BlockRead,
+	BlockWrite uint64
+
+	BytesReceived,
+	BytesSent float64
+
+	CPUUsagePercentage    float64
+	MemoryUsagePercentage float64
+}
+
+func ListenResourcesUsage(client *client.Client, containerID string) (<-chan *ResourcesUsage, <-chan error, error) {
 	apiResponse, err := client.ContainerStats(
 		context.Background(),
 		containerID,
@@ -18,8 +32,11 @@ func ListenResourcesUsage(client *client.Client, containerID string) (<-chan int
 	if err != nil {
 		return nil, nil, err
 	}
+	if apiResponse.OSType == "windows" {
+		return nil, nil, errors.New("Unsupported OS: windows")
+	}
 
-	resultChannel := make(chan interface{})
+	resultChannel := make(chan *ResourcesUsage)
 	errorsChannel := make(chan error)
 
 	go func() {
@@ -41,7 +58,23 @@ func ListenResourcesUsage(client *client.Client, containerID string) (<-chan int
 				break
 			}
 
-			resultChannel <- stats
+			cpuPercentageUsage := calculateCPUPercentUnix(stats)
+			memoryPercentageUsage := calculateMemoryUsage(stats)
+			blockRead, blockWrite := calculateBlockIO(stats.BlkioStats)
+			bytesReceived, bytesSent := calculateNetwork(stats.Networks)
+
+			resultChannel <- &ResourcesUsage{
+				ContainerID: containerID,
+
+				CPUUsagePercentage:    cpuPercentageUsage,
+				MemoryUsagePercentage: memoryPercentageUsage,
+
+				BlockRead:  blockRead,
+				BlockWrite: blockWrite,
+
+				BytesReceived: bytesReceived,
+				BytesSent:     bytesSent,
+			}
 		}
 
 		_ = apiResponse.Body.Close()
@@ -50,43 +83,51 @@ func ListenResourcesUsage(client *client.Client, containerID string) (<-chan int
 	return resultChannel, errorsChannel, nil
 }
 
-// https://github.com/moby/moby/blob/eb131c5383db8cac633919f82abad86c99bffbe5/cli/command/container/stats_helpers.go#L190
-func calculateCPUPercentWindows(v *types.StatsJSON) float64 {
-	// Max number of 100ns intervals between the previous time read and now
-	possIntervals := uint64(v.Read.Sub(v.PreRead).Nanoseconds()) // Start with number of ns intervals
-	possIntervals /= 100                                         // Convert to number of 100ns intervals
-	possIntervals *= uint64(v.NumProcs)                          // Multiple by the number of processors
+// based on https://github.com/moby/moby/blob/eb131c5383db8cac633919f82abad86c99bffbe5/cli/command/container/stats_helpers.go#L175
+func calculateCPUPercentUnix(stats *types.StatsJSON) float64 {
+	var (
+		cpuPercent = 0.0
+		// calculate the change for the cpu usage of the container in between readings
+		cpuDelta = float64(stats.CPUStats.CPUUsage.TotalUsage) - float64(stats.PreCPUStats.CPUUsage.TotalUsage)
+		// calculate the change for the entire system between readings
+		systemDelta = float64(stats.CPUStats.SystemUsage) - float64(stats.PreCPUStats.SystemUsage)
+	)
 
-	// Intervals used
-	intervalsUsed := v.CPUStats.CPUUsage.TotalUsage - v.PreCPUStats.CPUUsage.TotalUsage
-
-	// Percentage avoiding divide-by-zero
-	if possIntervals > 0 {
-		return float64(intervalsUsed) / float64(possIntervals) * 100.0
+	if systemDelta > 0.0 && cpuDelta > 0.0 {
+		cpuPercent = (cpuDelta / systemDelta) * float64(len(stats.CPUStats.CPUUsage.PercpuUsage)) * 100.0
 	}
-	return 0.00
+	return cpuPercent
 }
 
-// https://github.com/moby/moby/blob/eb131c5383db8cac633919f82abad86c99bffbe5/cli/command/container/stats_helpers.go#L206
-func calculateBlockIO(blkio types.BlkioStats) (blkRead uint64, blkWrite uint64) {
-	for _, bioEntry := range blkio.IoServiceBytesRecursive {
+// based on https://github.com/moby/moby/blob/eb131c5383db8cac633919f82abad86c99bffbe5/cli/command/container/stats_helpers.go#L107
+func calculateMemoryUsage(stats *types.StatsJSON) float64 {
+	// MemoryStats.Limit will never be 0 unless the container is not running and we haven't
+	// got any data from cgroup
+	if stats.MemoryStats.Limit != 0 {
+		return float64(stats.MemoryStats.Usage) / float64(stats.MemoryStats.Limit) * 100.0
+	}
+
+	return 0
+}
+
+// based on https://github.com/moby/moby/blob/eb131c5383db8cac633919f82abad86c99bffbe5/cli/command/container/stats_helpers.go#L206
+func calculateBlockIO(blockIO types.BlkioStats) (blockRead uint64, blockWrite uint64) {
+	for _, bioEntry := range blockIO.IoServiceBytesRecursive {
 		switch strings.ToLower(bioEntry.Op) {
 		case "read":
-			blkRead = blkRead + bioEntry.Value
+			blockRead = blockRead + bioEntry.Value
 		case "write":
-			blkWrite = blkWrite + bioEntry.Value
+			blockWrite = blockWrite + bioEntry.Value
 		}
 	}
 	return
 }
 
-// https://github.com/moby/moby/blob/eb131c5383db8cac633919f82abad86c99bffbe5/cli/command/container/stats_helpers.go#L218
-func calculateNetwork(network map[string]types.NetworkStats) (float64, float64) {
-	var rx, tx float64
-
+// based on https://github.com/moby/moby/blob/eb131c5383db8cac633919f82abad86c99bffbe5/cli/command/container/stats_helpers.go#L218
+func calculateNetwork(network map[string]types.NetworkStats) (bytesReceived float64, bytesSent float64) {
 	for _, v := range network {
-		rx += float64(v.RxBytes)
-		tx += float64(v.TxBytes)
+		bytesReceived += float64(v.RxBytes)
+		bytesSent += float64(v.TxBytes)
 	}
-	return rx, tx
+	return
 }
