@@ -3,32 +3,100 @@ package main
 import (
 	"context"
 	"fmt"
+	"github.com/caarlos0/env"
 	"github.com/docker/docker/api/types"
 	"github.com/docker/docker/client"
+	"log"
+	"path/filepath"
 )
 
+var (
+	configuration *Configuration
+)
+
+func initConfiguration() {
+	configuration = &Configuration{}
+
+	err := env.Parse(configuration)
+	check(err)
+}
+
+func init() {
+	initConfiguration()
+}
+
 func main() {
+	var results []*ResourcesUsage
+	container, resourcesStream := listenResourcesUsage()
+
+	for item := range resourcesStream {
+		results = append(results, item)
+	}
+	if len(results) == 0 {
+		log.Fatal(
+			fmt.Sprintf(
+				"Failed to get metrics from container %s. 0 events received",
+				configuration.ContainerID,
+			),
+		)
+	}
+
+	saveMetrics(container, results)
+}
+
+func listenResourcesUsage() (types.ContainerJSON, <-chan *ResourcesUsage) {
 	cli, err := client.NewEnvClient()
-	if err != nil {
-		panic(err)
-	}
+	check(err)
 
-	containers, err := cli.ContainerList(
+	container, err := cli.ContainerInspect(
 		context.Background(),
-		types.ContainerListOptions{},
+		configuration.ContainerID,
 	)
-	if err != nil {
-		panic(err)
-	}
-
-	container := containers[0]
+	check(err)
 
 	results, _, err := ListenResourcesUsage(cli, container.ID)
-	if err != nil {
-		panic(err)
+	check(err)
+
+	return container, results
+}
+
+func saveMetrics(container types.ContainerJSON, metrics []*ResourcesUsage) {
+	directoryPath := filepath.Join(
+		configuration.ResultDirectory,
+		fmt.Sprintf("%s (%s)", container.Name, container.ID),
+	)
+
+	csvReporter := NewCsvReporter(directoryPath)
+	pngReporter := NewPngReporter(directoryPath)
+
+	var (
+		cpuMetrics    []*Metric
+		memoryMetrics []*Metric
+	)
+
+	for _, metric := range metrics {
+		cpuMetrics = append(cpuMetrics, &Metric{
+			Timestamp: metric.CurrentTime.Unix(),
+			Value:     metric.CPUUsagePercentage,
+		})
+		memoryMetrics = append(memoryMetrics, &Metric{
+			Timestamp: metric.CurrentTime.Unix(),
+			Value:     metric.MemoryUsagePercentage,
+		})
 	}
 
-	for item := range results {
-		fmt.Println(item)
+	var err error
+	err = csvReporter.Report("cpu", "CPU usage (percentage)", cpuMetrics)
+	err = csvReporter.Report("ram", "RAM usage (percentage)", memoryMetrics)
+
+	err = pngReporter.Report("cpu", "CPU usage (percentage)", cpuMetrics)
+	err = pngReporter.Report("ram", "RAM usage (percentage)", memoryMetrics)
+
+	check(err)
+}
+
+func check(err error) {
+	if err != nil {
+		log.Fatal(err)
 	}
 }

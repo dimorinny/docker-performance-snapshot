@@ -8,13 +8,16 @@ import (
 	"github.com/pkg/errors"
 	"io"
 	"strings"
+	"time"
 )
 
 type ResourcesUsage struct {
 	ContainerID string
 
+	CurrentTime time.Time
+
 	BlockRead,
-	BlockWrite uint64
+	BlockWrite float64
 
 	BytesReceived,
 	BytesSent float64
@@ -66,11 +69,13 @@ func ListenResourcesUsage(client *client.Client, containerID string) (<-chan *Re
 			resultChannel <- &ResourcesUsage{
 				ContainerID: containerID,
 
+				CurrentTime: time.Now(),
+
 				CPUUsagePercentage:    cpuPercentageUsage,
 				MemoryUsagePercentage: memoryPercentageUsage,
 
-				BlockRead:  blockRead,
-				BlockWrite: blockWrite,
+				BlockRead:  float64(blockRead),
+				BlockWrite: float64(blockWrite),
 
 				BytesReceived: bytesReceived,
 				BytesSent:     bytesSent,
