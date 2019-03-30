@@ -30,6 +30,12 @@ func main() {
 	container, resourcesStream := listenResourcesUsage()
 
 	for item := range resourcesStream {
+		fmt.Println(
+			fmt.Sprintf(
+				"Metrics received: %+v",
+				item,
+			),
+		)
 		results = append(results, item)
 	}
 	if len(results) == 0 {
