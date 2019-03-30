@@ -86,11 +86,11 @@ func saveMetrics(container types.ContainerJSON, metrics []*ResourcesUsage) {
 	}
 
 	var err error
-	err = csvReporter.Report("cpu", "CPU usage (percentage)", cpuMetrics)
-	err = csvReporter.Report("ram", "RAM usage (percentage)", memoryMetrics)
+	err = csvReporter.Report("cpu_percentage", "CPU usage (percentage)", cpuMetrics)
+	err = csvReporter.Report("ram_percentage", "RAM usage (percentage)", memoryMetrics)
 
-	err = pngReporter.Report("cpu", "CPU usage (percentage)", cpuMetrics)
-	err = pngReporter.Report("ram", "RAM usage (percentage)", memoryMetrics)
+	err = pngReporter.Report("cpu_percentage", "CPU usage (percentage)", cpuMetrics)
+	err = pngReporter.Report("ram_percentage", "RAM usage (percentage)", memoryMetrics)
 
 	check(err)
 }
