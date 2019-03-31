@@ -33,3 +33,8 @@ docker run -d \
     -e CONTAINER="<running-container-id>" \
     dimorinny/docker-performance-snapshot:latest
 ```
+As a result you will have directory with csv files of supported metrics and images like that:
+
+![CPU usage example graph](https://raw.githubusercontent.com/dimorinny/docker-performance-snapshot/master/example/cpu.png)
+
+![RAM usage example graph](https://raw.githubusercontent.com/dimorinny/docker-performance-snapshot/master/example/ram.png)
