@@ -27,7 +27,7 @@ Or you can use docker container:
 mkdir /reports
 
 docker run -d \
-    -v /var/run/docker.sock:/container/path/docker.sock \
+    -v /var/run/docker.sock:/var/run/docker.sock \
     -v /reports:/reports \
     -e RESULT_DIRECTORY="/reports" \
     -e CONTAINER="<running-container-id>" \

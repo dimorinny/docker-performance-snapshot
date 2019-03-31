@@ -41,9 +41,10 @@ func (r *PngReporter) Report(name string, description string, metrics []*Metric)
 	graph := chart.Chart{
 		Title:      description,
 		TitleStyle: chart.StyleShow(),
+		Height:     1400,
 		Background: chart.Style{
 			Padding: chart.Box{
-				Top:    75,
+				Top:    145,
 				Bottom: 15,
 				Left:   15,
 				Right:  15,
